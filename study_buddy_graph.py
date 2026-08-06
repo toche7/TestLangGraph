@@ -1,4 +1,5 @@
 import ast
+import sys
 import operator as op
 import os
 import re
@@ -225,7 +226,7 @@ def build_app():
 app = build_app()
 
 
-if __name__ == "__main__":
+def export_graph() -> None:
     graph = app.get_graph()
     mermaid_graph = graph.draw_mermaid()
 
@@ -239,15 +240,9 @@ if __name__ == "__main__":
     print(graph.draw_ascii())
     print("\nMermaid graph saved to phase6_graph.md")
 
-    test_inputs = [
-        "I want short answers for my homework.",
-        "What is a node in LangGraph?",
-        "Calculate 14 * 12",
-        "help me",
-        "Define edge",
-    ]
 
-    conversation_state: StudyBuddyState = {
+def create_initial_state() -> StudyBuddyState:
+    return {
         "messages": [],
         "route": "answer",
         "task_type": "explain",
@@ -258,22 +253,77 @@ if __name__ == "__main__":
         "needs_clarification": False,
     }
 
+
+def print_state_snapshot(conversation_state: StudyBuddyState) -> None:
+    print("\nState snapshot:")
+    print(
+        {
+            "route": conversation_state["route"],
+            "task_type": conversation_state["task_type"],
+            "topic": conversation_state["topic"],
+            "preferred_tone": conversation_state["preferred_tone"],
+            "turn_count": conversation_state["turn_count"],
+            "needs_clarification": conversation_state["needs_clarification"],
+            "tool_result": conversation_state["tool_result"],
+        }
+    )
+
+
+def run_demo() -> None:
+    test_inputs = [
+        "I want short answers for my homework.",
+        "What is a node in LangGraph?",
+        "Calculate 14 * 12",
+        "help me",
+        "Define edge",
+    ]
+
+    conversation_state = create_initial_state()
+
     for user_input in test_inputs:
         conversation_state["messages"].append(HumanMessage(content=user_input))
         conversation_state = app.invoke(conversation_state)
         print("\nUser input:")
         print(user_input)
-        print("\nState snapshot:")
-        print(
-            {
-                "route": conversation_state["route"],
-                "task_type": conversation_state["task_type"],
-                "topic": conversation_state["topic"],
-                "preferred_tone": conversation_state["preferred_tone"],
-                "turn_count": conversation_state["turn_count"],
-                "needs_clarification": conversation_state["needs_clarification"],
-                "tool_result": conversation_state["tool_result"],
-            }
-        )
+        print_state_snapshot(conversation_state)
         print("\nAssistant response:")
         print(conversation_state["messages"][-1].content)
+
+
+def run_chatbot() -> None:
+    conversation_state = create_initial_state()
+
+    print("\nStudy Buddy chat is ready.")
+    print("Type your message and press Enter. Type 'exit' or 'quit' to stop.")
+
+    while True:
+        try:
+            user_input = input("\nYou: ").strip()
+        except EOFError:
+            print("\nEnding chat.")
+            break
+        except KeyboardInterrupt:
+            print("\nEnding chat.")
+            break
+
+        if not user_input:
+            print("Please enter a message.")
+            continue
+
+        if user_input.lower() in {"exit", "quit"}:
+            print("Ending chat.")
+            break
+
+        conversation_state["messages"].append(HumanMessage(content=user_input))
+        conversation_state = app.invoke(conversation_state)
+        print_state_snapshot(conversation_state)
+        print("\nStudy Buddy:")
+        print(conversation_state["messages"][-1].content)
+
+
+if __name__ == "__main__":
+    export_graph()
+    if len(sys.argv) > 1 and sys.argv[1] == "--demo":
+        run_demo()
+    else:
+        run_chatbot()

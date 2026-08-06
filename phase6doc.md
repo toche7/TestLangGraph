@@ -171,9 +171,13 @@ This tool is intentionally simple. Its purpose is to show how multiple tool path
 
 ## Example multi-turn behavior
 
-When the script runs, it simulates several inputs in sequence.
+By default, the script now runs as an interactive chatbot.
 
-Typical pattern:
+You can type messages one by one and the graph will keep state across turns until you type `exit` or `quit`.
+
+There is also an optional demo mode that replays a fixed sequence of sample inputs.
+
+Typical interactive pattern:
 1. User says they want short answers for homework.
 2. State saves `preferred_tone=short`.
 3. User asks what a node in LangGraph is.
@@ -188,10 +192,16 @@ This is the main Phase 6 idea: one graph can choose among multiple actions while
 
 ## How to run
 
-From project root:
+From project root, interactive chatbot mode:
 
 ```bash
 /home/toche/Dev/TestLangGraph/.venv/bin/python study_buddy_graph.py
+```
+
+Optional scripted demo mode:
+
+```bash
+/home/toche/Dev/TestLangGraph/.venv/bin/python study_buddy_graph.py --demo
 ```
 
 What to inspect:
