@@ -1,4 +1,7 @@
+import ast
+import operator as op
 import os
+import re
 from typing import Annotated, TypedDict
 
 from dotenv import load_dotenv
@@ -17,6 +20,36 @@ class State(TypedDict):
     topic: str
     preferred_tone: str
     turn_count: int
+    tool_result: str
+
+
+_SAFE_OPS = {
+    ast.Add: op.add,
+    ast.Sub: op.sub,
+    ast.Mult: op.mul,
+    ast.Div: op.truediv,
+    ast.Pow: op.pow,
+    ast.USub: op.neg,
+}
+
+
+def calculator_tool(expression: str) -> str:
+    """Evaluate a basic arithmetic expression without using eval()."""
+    def _eval(node: ast.expr) -> float:
+        if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+            return float(node.value)
+        if isinstance(node, ast.BinOp) and type(node.op) in _SAFE_OPS:
+            return _SAFE_OPS[type(node.op)](_eval(node.left), _eval(node.right))
+        if isinstance(node, ast.UnaryOp) and type(node.op) in _SAFE_OPS:
+            return _SAFE_OPS[type(node.op)](_eval(node.operand))
+        raise ValueError(f"Unsupported operation: {ast.dump(node)}")
+
+    try:
+        tree = ast.parse(expression.strip(), mode="eval")
+        result = _eval(tree.body)
+        return str(int(result) if result == int(result) else result)
+    except Exception as exc:
+        return f"Error: {exc}"
 
 
 def build_app():
@@ -70,6 +103,12 @@ def build_app():
     def router_node(state: State):
         text = str(state["messages"][-1].content).strip().lower() if state["messages"] else ""
 
+        # Route to tool if the message contains a math expression.
+        if re.search(r"\d+\s*[\+\-\*\/\^]\s*\d+", text) or any(
+            kw in text for kw in ("calculate", "compute", "what is", "what's")
+        ) and re.search(r"[\d\+\-\*\/]", text):
+            return {"route": "tool"}
+
         # Treat explicit questions as answerable, otherwise ask for clarification.
         question_starters = (
             "what",
@@ -89,25 +128,36 @@ def build_app():
         is_question = state.get("intent") == "question" or text.startswith(question_starters)
         return {"route": "answer" if is_question else "clarify"}
 
+    def tool_node(state: State):
+        last_msg = str(state["messages"][-1].content) if state["messages"] else ""
+        # Extract the first arithmetic expression from the message.
+        match = re.search(r"[\d\.]+(?:\s*[\+\-\*\/\^]\s*[\d\.]+)+", last_msg)
+        expression = match.group(0) if match else ""
+        result = calculator_tool(expression) if expression else "No valid arithmetic expression found."
+        return {"tool_result": result}
+
     def answer_node(state: State):
         last_user_message = state["messages"][-1].content if state["messages"] else "Hello"
         preferred_tone = state.get("preferred_tone", "normal")
         topic = state.get("topic", "general")
         turn_count = state.get("turn_count", 1)
+        tool_result = state.get("tool_result", "")
 
         style_instruction = "Respond in 1-2 short sentences." if preferred_tone == "short" else "Respond with a concise but clear explanation."
         if preferred_tone == "detailed":
             style_instruction = "Respond with a detailed but beginner-friendly explanation."
 
+        tool_section = f"Tool result from calculator: {tool_result}\n" if tool_result else ""
         prompt = (
             "You are a helpful assistant.\n"
             f"Known user topic preference: {topic}.\n"
             f"Current turn count: {turn_count}.\n"
             f"Tone preference: {preferred_tone}. {style_instruction}\n"
+            f"{tool_section}"
             f"User: {last_user_message}"
         )
         reply = call_llm(prompt)
-        return {"messages": [AIMessage(content=reply)]}
+        return {"messages": [AIMessage(content=reply)], "tool_result": ""}
 
     def clarify_node(state: State):
         last_user_message = state["messages"][-1].content if state["messages"] else ""
@@ -126,6 +176,7 @@ def build_app():
 
     builder.add_node("context", context_node)
     builder.add_node("router", router_node)
+    builder.add_node("tool", tool_node)
     builder.add_node("answer", answer_node)
     builder.add_node("clarify", clarify_node)
 
@@ -137,8 +188,10 @@ def build_app():
         {
             "answer": "answer",
             "clarify": "clarify",
+            "tool": "tool",
         },
     )
+    builder.add_edge("tool", "answer")
     builder.add_edge("answer", END)
     builder.add_edge("clarify", END)
     return builder.compile()
@@ -164,6 +217,7 @@ if __name__ == "__main__":
     test_inputs = [
         "I prefer short answers about LangGraph.",
         "What is a node in LangGraph?",
+        "Calculate 128 * 37",
         "And how is it different from an edge?",
     ]
 
@@ -174,6 +228,7 @@ if __name__ == "__main__":
         "topic": "general",
         "preferred_tone": "normal",
         "turn_count": 0,
+        "tool_result": "",
     }
 
     for user_input in test_inputs:
@@ -189,6 +244,7 @@ if __name__ == "__main__":
                 "preferred_tone": conversation_state["preferred_tone"],
                 "turn_count": conversation_state["turn_count"],
                 "route": conversation_state["route"],
+                "tool_result": conversation_state.get("tool_result", ""),
             }
         )
         print("\nModel response:")
