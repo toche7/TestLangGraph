@@ -2,7 +2,7 @@ import os
 from typing import Annotated, TypedDict
 
 from dotenv import load_dotenv
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_groq import ChatGroq
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
@@ -12,6 +12,7 @@ load_dotenv()
 
 class State(TypedDict):
     messages: Annotated[list, add_messages]
+    route: str
 
 
 def build_app():
@@ -26,48 +27,73 @@ def build_app():
                 groq_api_key=groq_api_key,
             )
             response = llm.invoke([HumanMessage(content=prompt)])
-            return response.content
+            if isinstance(response.content, str):
+                return response.content
+            return str(response.content)
 
         return (
             "GROQ_API_KEY is not set. "
             "Please add it to your .env file to use the model."
         )
 
-    def route_message(state: State) -> str:
-        messages = state["messages"]
-        last_text = messages[-1].content.lower() if messages else ""
-        if "summary" in last_text:
-            return "summary"
-        return "joke"
+    def router_node(state: State):
+        last_user_message = state["messages"][-1].content if state["messages"] else ""
+        text = str(last_user_message).strip().lower()
 
-    def router(state: State):
-        return {}
+        # Treat explicit questions as answerable, otherwise ask for clarification.
+        question_starters = (
+            "what",
+            "why",
+            "how",
+            "when",
+            "where",
+            "who",
+            "which",
+            "can",
+            "could",
+            "do",
+            "does",
+            "is",
+            "are",
+        )
+        is_question = "?" in text or text.startswith(question_starters)
+        return {"route": "answer" if is_question else "clarify"}
 
-    def joke_node(state: State):
-        user_text = state["messages"][-1].content if state["messages"] else "Hello"
+    def answer_node(state: State):
+        last_user_message = state["messages"][-1].content if state["messages"] else "Hello"
         prompt = (
-            f"Write one short, clean joke about: {user_text}. "
-            "Keep it under 20 words."
+            "You are a helpful assistant. Give a short direct answer to the user's question.\n"
+            f"User: {last_user_message}"
         )
         reply = call_llm(prompt)
-        return {"messages": [HumanMessage(content=reply)]}
+        return {"messages": [AIMessage(content=reply)]}
 
-    def summary_node(state: State):
-        user_text = state["messages"][-1].content if state["messages"] else "Hello"
-        prompt = (
-            f"Summarize this in exactly one sentence: {user_text}. "
-            "Do not use bullet points."
+    def clarify_node(state: State):
+        last_user_message = state["messages"][-1].content if state["messages"] else ""
+        follow_up = (
+            "I can help with that. Could you clarify what you want exactly? "
+            f"For example: ask a specific question about '{last_user_message}'."
         )
-        reply = call_llm(prompt)
-        return {"messages": [HumanMessage(content=reply)]}
+        return {"messages": [AIMessage(content=follow_up)]}
 
-    builder.add_node("router", router)
-    builder.add_node("joke", joke_node)
-    builder.add_node("summary", summary_node)
+    def pick_route(state: State):
+        return state["route"]
+
+    builder.add_node("router", router_node)
+    builder.add_node("answer", answer_node)
+    builder.add_node("clarify", clarify_node)
+
     builder.set_entry_point("router")
-    builder.add_conditional_edges("router", route_message, {"joke": "joke", "summary": "summary"})
-    builder.add_edge("joke", END)
-    builder.add_edge("summary", END)
+    builder.add_conditional_edges(
+        "router",
+        pick_route,
+        {
+            "answer": "answer",
+            "clarify": "clarify",
+        },
+    )
+    builder.add_edge("answer", END)
+    builder.add_edge("clarify", END)
     return builder.compile()
 
 
@@ -88,6 +114,14 @@ if __name__ == "__main__":
     print(graph.draw_ascii())
     print("\nMermaid graph saved to graph.md")
 
-    result = app.invoke({"messages": [HumanMessage(content="Summarize about the sun")]})
-    print("\nModel response:")
-    print(result["messages"][-1].content)
+    test_inputs = [
+        "What is LangGraph in one sentence?",
+        "LangGraph",
+    ]
+
+    for user_input in test_inputs:
+        result = app.invoke({"messages": [HumanMessage(content=user_input)]})
+        print("\nUser input:")
+        print(user_input)
+        print("\nModel response:")
+        print(result["messages"][-1].content)
